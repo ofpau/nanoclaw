@@ -22,6 +22,11 @@ groups/global/*
 *.keys.json
 .env
 
+# Database files
+*.db
+*.db-wal
+*.db-shm
+
 # Temp files
 .tmp-*
 
