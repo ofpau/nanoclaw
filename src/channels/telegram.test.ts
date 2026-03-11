@@ -40,7 +40,8 @@ vi.mock('../transcription.js', () => ({
 
 // Mock group-folder
 vi.mock('../group-folder.js', () => ({
-  resolveGroupFolderPath: (folder: string) => `/tmp/nanoclaw-test-groups/${folder}`,
+  resolveGroupFolderPath: (folder: string) =>
+    `/tmp/nanoclaw-test-groups/${folder}`,
 }));
 
 // --- Grammy mock ---

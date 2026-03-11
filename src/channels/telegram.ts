@@ -123,8 +123,15 @@ export class TelegramChannel implements Channel {
       }
 
       // Store chat metadata for discovery
-      const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'telegram', isGroup);
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        chatName,
+        'telegram',
+        isGroup,
+      );
 
       // Only deliver full message for registered groups
       const group = this.opts.registeredGroups()[chatJid];
@@ -167,8 +174,15 @@ export class TelegramChannel implements Channel {
         'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
-      const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
       this.opts.onMessage(chatJid, {
         id: ctx.message.message_id.toString(),
         chat_jid: chatJid,
@@ -191,7 +205,10 @@ export class TelegramChannel implements Channel {
 
       if (mime === 'application/pdf' || name.toLowerCase().endsWith('.pdf')) {
         await this.handlePdfDocument(ctx);
-      } else if (mime.startsWith('image/') || /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i.test(name)) {
+      } else if (
+        mime.startsWith('image/') ||
+        /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i.test(name)
+      ) {
         await this.handleImageDocument(ctx);
       } else {
         storeNonText(ctx, `[Document: ${name}]`);
@@ -240,9 +257,14 @@ export class TelegramChannel implements Channel {
       'Unknown';
     const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
-    const isGroup =
-      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-    this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    this.opts.onChatMetadata(
+      chatJid,
+      timestamp,
+      undefined,
+      'telegram',
+      isGroup,
+    );
 
     // Try to download and transcribe
     let content = '[Voice message]';
@@ -290,9 +312,14 @@ export class TelegramChannel implements Channel {
       'Unknown';
     const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
-    const isGroup =
-      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-    this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    this.opts.onChatMetadata(
+      chatJid,
+      timestamp,
+      undefined,
+      'telegram',
+      isGroup,
+    );
 
     const doc = ctx.message.document;
     const fileName = doc?.file_name || 'document.pdf';
@@ -320,7 +347,10 @@ export class TelegramChannel implements Channel {
           }
         }
       } catch (err) {
-        logger.warn({ err, chatJid, fileName }, 'Failed to download PDF attachment');
+        logger.warn(
+          { err, chatJid, fileName },
+          'Failed to download PDF attachment',
+        );
       }
     }
 
@@ -350,11 +380,18 @@ export class TelegramChannel implements Channel {
     const doc = ctx.message.document;
     const fileName = doc?.file_name || 'image';
 
-    const isGroup =
-      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-    this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    this.opts.onChatMetadata(
+      chatJid,
+      timestamp,
+      undefined,
+      'telegram',
+      isGroup,
+    );
 
-    let content = caption ? `[Document: ${fileName}] ${caption}` : `[Document: ${fileName}]`;
+    let content = caption
+      ? `[Document: ${fileName}] ${caption}`
+      : `[Document: ${fileName}]`;
 
     const fileId = doc?.file_id;
     if (fileId && this.bot) {
@@ -377,7 +414,10 @@ export class TelegramChannel implements Channel {
           }
         }
       } catch (err) {
-        logger.warn({ err, chatJid, fileName }, 'Failed to process Telegram image document');
+        logger.warn(
+          { err, chatJid, fileName },
+          'Failed to process Telegram image document',
+        );
       }
     }
 
@@ -405,9 +445,14 @@ export class TelegramChannel implements Channel {
       'Unknown';
     const caption = ctx.message.caption || '';
 
-    const isGroup =
-      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-    this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    this.opts.onChatMetadata(
+      chatJid,
+      timestamp,
+      undefined,
+      'telegram',
+      isGroup,
+    );
 
     let content = caption ? `[Photo] ${caption}` : '[Photo]';
 
