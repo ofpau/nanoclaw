@@ -11,6 +11,15 @@ import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
+/** Truncate a string without splitting multi-byte Unicode characters (emoji surrogate pairs). */
+function truncateUnicodeSafe(str: string, maxLength: number): string {
+  if (str.length <= maxLength) return str;
+  let end = maxLength;
+  const code = str.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end--;
+  return str.slice(0, end);
+}
+
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
@@ -177,7 +186,7 @@ server.tool(
       const formatted = tasks
         .map(
           (t: { id: string; prompt: string; schedule_type: string; schedule_value: string; status: string; next_run: string }) =>
-            `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`,
+            `- [${t.id}] ${truncateUnicodeSafe(t.prompt, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`,
         )
         .join('\n');
 

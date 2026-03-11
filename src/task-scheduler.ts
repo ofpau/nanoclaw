@@ -20,6 +20,7 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
+import { truncateUnicodeSafe } from './unicode.js';
 
 /**
  * Compute the next run time for a recurring task, anchored to the
@@ -233,7 +234,7 @@ async function runTask(
   const resultSummary = error
     ? `Error: ${error}`
     : result
-      ? result.slice(0, 200)
+      ? truncateUnicodeSafe(result, 200)
       : 'Completed';
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }

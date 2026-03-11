@@ -61,6 +61,7 @@ import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { parseImageReferences } from './image.js';
 import { logger } from './logger.js';
+import { truncateUnicodeSafe } from './unicode.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -267,7 +268,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         logger.info(
           { group: group.name },
-          `Agent output: ${raw.slice(0, 200)}`,
+          `Agent output: ${truncateUnicodeSafe(raw, 200)}`,
         );
         if (text) {
           await channel.sendMessage(chatJid, text);

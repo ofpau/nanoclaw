@@ -19,6 +19,16 @@ import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+/** Truncate a string without splitting multi-byte Unicode characters (emoji surrogate pairs). */
+function truncateUnicodeSafe(str: string, maxLength: number): string {
+  if (str.length <= maxLength) return str;
+  // If the char at the cut point is a high surrogate, back up one to avoid splitting the pair
+  let end = maxLength;
+  const code = str.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end--;
+  return str.slice(0, end);
+}
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -270,7 +280,7 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
   for (const msg of messages) {
     const sender = msg.role === 'user' ? 'User' : (assistantName || 'Assistant');
     const content = msg.content.length > 2000
-      ? msg.content.slice(0, 2000) + '...'
+      ? truncateUnicodeSafe(msg.content, 2000) + '...'
       : msg.content;
     lines.push(`**${sender}**: ${content}`);
     lines.push('');
