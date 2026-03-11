@@ -1,4 +1,12 @@
+import fs from 'fs';
+
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+
+// Mock image processing
+const mockProcessImage = vi.fn().mockResolvedValue(null);
+vi.mock('../image.js', () => ({
+  processImage: (...args: any[]) => mockProcessImage(...args),
+}));
 
 // --- Mocks ---
 
@@ -24,6 +32,17 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
+// Mock transcription
+const mockTranscribeAudio = vi.fn().mockResolvedValue(null);
+vi.mock('../transcription.js', () => ({
+  transcribeAudio: (...args: any[]) => mockTranscribeAudio(...args),
+}));
+
+// Mock group-folder
+vi.mock('../group-folder.js', () => ({
+  resolveGroupFolderPath: (folder: string) => `/tmp/nanoclaw-test-groups/${folder}`,
+}));
+
 // --- Grammy mock ---
 
 type Handler = (...args: any[]) => any;
@@ -40,6 +59,7 @@ vi.mock('grammy', () => ({
     api = {
       sendMessage: vi.fn().mockResolvedValue(undefined),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn().mockResolvedValue({ file_path: 'voice/file_0.oga' }),
     };
 
     constructor(token: string) {
@@ -583,7 +603,81 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('stores voice message with placeholder', async () => {
+    it('transcribes voice message when API key is set', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      mockTranscribeAudio.mockResolvedValueOnce('Hello world');
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+      } as Response);
+
+      const ctx = createMediaCtx({
+        extra: { voice: { file_id: 'voice_123', duration: 5 } },
+      });
+      await triggerMediaMessage('message:voice', ctx);
+
+      expect(currentBot().api.getFile).toHaveBeenCalledWith('voice_123');
+      expect(mockTranscribeAudio).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        'voice.ogg',
+      );
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ content: '[Voice: Hello world]' }),
+      );
+      fetchSpy.mockRestore();
+    });
+
+    it('falls back to placeholder when transcription returns null', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      mockTranscribeAudio.mockResolvedValueOnce(null);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+      } as Response);
+
+      const ctx = createMediaCtx({
+        extra: { voice: { file_id: 'voice_123', duration: 5 } },
+      });
+      await triggerMediaMessage('message:voice', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ content: '[Voice message]' }),
+      );
+      fetchSpy.mockRestore();
+    });
+
+    it('falls back to placeholder when file download fails', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      } as Response);
+
+      const ctx = createMediaCtx({
+        extra: { voice: { file_id: 'voice_123', duration: 5 } },
+      });
+      await triggerMediaMessage('message:voice', ctx);
+
+      expect(mockTranscribeAudio).not.toHaveBeenCalled();
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ content: '[Voice message]' }),
+      );
+      fetchSpy.mockRestore();
+    });
+
+    it('falls back to placeholder when voice has no file_id', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -639,6 +733,223 @@ describe('TelegramChannel', () => {
         'tg:100200300',
         expect.objectContaining({ content: '[Document: file]' }),
       );
+    });
+
+    it('downloads PDF document and saves to attachments', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
+      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+      } as Response);
+
+      const ctx = createMediaCtx({
+        extra: {
+          document: {
+            file_id: 'pdf_123',
+            file_name: 'report.pdf',
+            mime_type: 'application/pdf',
+          },
+        },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(currentBot().api.getFile).toHaveBeenCalledWith('pdf_123');
+      expect(mkdirSpy).toHaveBeenCalledWith(
+        '/tmp/nanoclaw-test-groups/test-group/attachments',
+        { recursive: true },
+      );
+      expect(writeSpy).toHaveBeenCalledWith(
+        '/tmp/nanoclaw-test-groups/test-group/attachments/report.pdf',
+        expect.any(Buffer),
+      );
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[PDF attached: attachments/report.pdf]',
+        }),
+      );
+      mkdirSpy.mockRestore();
+      writeSpy.mockRestore();
+      fetchSpy.mockRestore();
+    });
+
+    it('detects PDF by file extension when mime_type is missing', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
+      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+      } as Response);
+
+      const ctx = createMediaCtx({
+        extra: {
+          document: {
+            file_id: 'pdf_456',
+            file_name: 'contract.PDF',
+            mime_type: '',
+          },
+        },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[PDF attached: attachments/contract.PDF]',
+        }),
+      );
+      mkdirSpy.mockRestore();
+      writeSpy.mockRestore();
+      fetchSpy.mockRestore();
+    });
+
+    it('falls back to document placeholder when PDF download fails', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      } as Response);
+
+      const ctx = createMediaCtx({
+        extra: {
+          document: {
+            file_id: 'pdf_789',
+            file_name: 'report.pdf',
+            mime_type: 'application/pdf',
+          },
+        },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[Document: report.pdf]',
+        }),
+      );
+      fetchSpy.mockRestore();
+    });
+
+    it('includes caption with downloaded PDF', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
+      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+      } as Response);
+
+      const ctx = createMediaCtx({
+        caption: 'Please review this',
+        extra: {
+          document: {
+            file_id: 'pdf_cap',
+            file_name: 'review.pdf',
+            mime_type: 'application/pdf',
+          },
+        },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[PDF attached: attachments/review.pdf] Please review this',
+        }),
+      );
+      mkdirSpy.mockRestore();
+      writeSpy.mockRestore();
+      fetchSpy.mockRestore();
+    });
+
+    it('processes image sent as document', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      mockProcessImage.mockResolvedValueOnce({
+        content: '[Image: attachments/img-123.jpg] look at this',
+        relativePath: 'attachments/img-123.jpg',
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+      } as Response);
+
+      const ctx = createMediaCtx({
+        caption: 'look at this',
+        extra: {
+          document: {
+            file_id: 'img_doc_1',
+            file_name: 'image.png',
+            mime_type: 'image/png',
+          },
+        },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(currentBot().api.getFile).toHaveBeenCalledWith('img_doc_1');
+      expect(mockProcessImage).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        '/tmp/nanoclaw-test-groups/test-group',
+        'look at this',
+      );
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[Image: attachments/img-123.jpg] look at this',
+        }),
+      );
+      fetchSpy.mockRestore();
+    });
+
+    it('detects image document by file extension', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      mockProcessImage.mockResolvedValueOnce({
+        content: '[Image: attachments/img-456.jpg]',
+        relativePath: 'attachments/img-456.jpg',
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+      } as Response);
+
+      const ctx = createMediaCtx({
+        extra: {
+          document: {
+            file_id: 'img_doc_2',
+            file_name: 'photo.JPG',
+            mime_type: '',
+          },
+        },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[Image: attachments/img-456.jpg]',
+        }),
+      );
+      fetchSpy.mockRestore();
     });
 
     it('stores sticker with emoji', async () => {
@@ -710,6 +1021,7 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
         '100200300',
         'Hello',
+        { parse_mode: 'Markdown' },
       );
     });
 
@@ -723,6 +1035,7 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
         '-1001234567890',
         'Group message',
+        { parse_mode: 'Markdown' },
       );
     });
 
@@ -739,11 +1052,13 @@ describe('TelegramChannel', () => {
         1,
         '100200300',
         'x'.repeat(4096),
+        { parse_mode: 'Markdown' },
       );
       expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
         2,
         '100200300',
         'x'.repeat(904),
+        { parse_mode: 'Markdown' },
       );
     });
 

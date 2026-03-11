@@ -1,8 +1,14 @@
+import fs from 'fs';
+import path from 'path';
+
 import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
+import { processImage } from '../image.js';
 import { logger } from '../logger.js';
+import { transcribeAudio } from '../transcription.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -174,15 +180,22 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', (ctx) => this.handlePhoto(ctx));
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) =>
-      storeNonText(ctx, '[Voice message]'),
-    );
+    this.bot.on('message:voice', (ctx) => this.handleVoice(ctx));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-    this.bot.on('message:document', (ctx) => {
-      const name = ctx.message.document?.file_name || 'file';
-      storeNonText(ctx, `[Document: ${name}]`);
+    this.bot.on('message:document', async (ctx) => {
+      const doc = ctx.message.document;
+      const name = doc?.file_name || 'file';
+      const mime = doc?.mime_type || '';
+
+      if (mime === 'application/pdf' || name.toLowerCase().endsWith('.pdf')) {
+        await this.handlePdfDocument(ctx);
+      } else if (mime.startsWith('image/') || /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i.test(name)) {
+        await this.handleImageDocument(ctx);
+      } else {
+        storeNonText(ctx, `[Document: ${name}]`);
+      }
     });
     this.bot.on('message:sticker', (ctx) => {
       const emoji = ctx.message.sticker?.emoji || '';
@@ -211,6 +224,228 @@ export class TelegramChannel implements Channel {
           resolve();
         },
       });
+    });
+  }
+
+  private async handleVoice(ctx: any): Promise<void> {
+    const chatJid = `tg:${ctx.chat.id}`;
+    const group = this.opts.registeredGroups()[chatJid];
+    if (!group) return;
+
+    const timestamp = new Date(ctx.message.date * 1000).toISOString();
+    const senderName =
+      ctx.from?.first_name ||
+      ctx.from?.username ||
+      ctx.from?.id?.toString() ||
+      'Unknown';
+    const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+
+    const isGroup =
+      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+
+    // Try to download and transcribe
+    let content = '[Voice message]';
+    const fileId = ctx.message.voice?.file_id;
+    if (fileId && this.bot) {
+      try {
+        const file = await this.bot.api.getFile(fileId);
+        if (file.file_path) {
+          const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            const transcript = await transcribeAudio(buf, 'voice.ogg');
+            if (transcript) {
+              content = `[Voice: ${transcript}]`;
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, chatJid }, 'Failed to transcribe Telegram voice');
+      }
+    }
+
+    this.opts.onMessage(chatJid, {
+      id: ctx.message.message_id.toString(),
+      chat_jid: chatJid,
+      sender: ctx.from?.id?.toString() || '',
+      sender_name: senderName,
+      content: `${content}${caption}`,
+      timestamp,
+      is_from_me: false,
+    });
+  }
+
+  private async handlePdfDocument(ctx: any): Promise<void> {
+    const chatJid = `tg:${ctx.chat.id}`;
+    const group = this.opts.registeredGroups()[chatJid];
+    if (!group) return;
+
+    const timestamp = new Date(ctx.message.date * 1000).toISOString();
+    const senderName =
+      ctx.from?.first_name ||
+      ctx.from?.username ||
+      ctx.from?.id?.toString() ||
+      'Unknown';
+    const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+
+    const isGroup =
+      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+
+    const doc = ctx.message.document;
+    const fileName = doc?.file_name || 'document.pdf';
+    let content = `[Document: ${fileName}]`;
+
+    const fileId = doc?.file_id;
+    if (fileId && this.bot) {
+      try {
+        const file = await this.bot.api.getFile(fileId);
+        if (file.file_path) {
+          const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            const groupDir = resolveGroupFolderPath(group.folder);
+            const attachDir = path.join(groupDir, 'attachments');
+            fs.mkdirSync(attachDir, { recursive: true });
+            const savePath = path.join(attachDir, fileName);
+            fs.writeFileSync(savePath, buf);
+            content = `[PDF attached: attachments/${fileName}]`;
+            logger.info(
+              { chatJid, fileName, size: buf.length },
+              'Downloaded PDF attachment',
+            );
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, chatJid, fileName }, 'Failed to download PDF attachment');
+      }
+    }
+
+    this.opts.onMessage(chatJid, {
+      id: ctx.message.message_id.toString(),
+      chat_jid: chatJid,
+      sender: ctx.from?.id?.toString() || '',
+      sender_name: senderName,
+      content: `${content}${caption}`,
+      timestamp,
+      is_from_me: false,
+    });
+  }
+
+  private async handleImageDocument(ctx: any): Promise<void> {
+    const chatJid = `tg:${ctx.chat.id}`;
+    const group = this.opts.registeredGroups()[chatJid];
+    if (!group) return;
+
+    const timestamp = new Date(ctx.message.date * 1000).toISOString();
+    const senderName =
+      ctx.from?.first_name ||
+      ctx.from?.username ||
+      ctx.from?.id?.toString() ||
+      'Unknown';
+    const caption = ctx.message.caption || '';
+    const doc = ctx.message.document;
+    const fileName = doc?.file_name || 'image';
+
+    const isGroup =
+      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+
+    let content = caption ? `[Document: ${fileName}] ${caption}` : `[Document: ${fileName}]`;
+
+    const fileId = doc?.file_id;
+    if (fileId && this.bot) {
+      try {
+        const file = await this.bot.api.getFile(fileId);
+        if (file.file_path) {
+          const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            const groupDir = resolveGroupFolderPath(group.folder);
+            const result = await processImage(buf, groupDir, caption);
+            if (result) {
+              content = result.content;
+              logger.info(
+                { chatJid, path: result.relativePath, size: buf.length },
+                'Processed image document attachment',
+              );
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, chatJid, fileName }, 'Failed to process Telegram image document');
+      }
+    }
+
+    this.opts.onMessage(chatJid, {
+      id: ctx.message.message_id.toString(),
+      chat_jid: chatJid,
+      sender: ctx.from?.id?.toString() || '',
+      sender_name: senderName,
+      content,
+      timestamp,
+      is_from_me: false,
+    });
+  }
+
+  private async handlePhoto(ctx: any): Promise<void> {
+    const chatJid = `tg:${ctx.chat.id}`;
+    const group = this.opts.registeredGroups()[chatJid];
+    if (!group) return;
+
+    const timestamp = new Date(ctx.message.date * 1000).toISOString();
+    const senderName =
+      ctx.from?.first_name ||
+      ctx.from?.username ||
+      ctx.from?.id?.toString() ||
+      'Unknown';
+    const caption = ctx.message.caption || '';
+
+    const isGroup =
+      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+
+    let content = caption ? `[Photo] ${caption}` : '[Photo]';
+
+    // Telegram sends multiple sizes — pick the largest
+    const photos = ctx.message.photo;
+    const largest = photos?.[photos.length - 1];
+    if (largest?.file_id && this.bot) {
+      try {
+        const file = await this.bot.api.getFile(largest.file_id);
+        if (file.file_path) {
+          const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            const groupDir = resolveGroupFolderPath(group.folder);
+            const result = await processImage(buf, groupDir, caption);
+            if (result) {
+              content = result.content;
+              logger.info(
+                { chatJid, path: result.relativePath, size: buf.length },
+                'Processed image attachment',
+              );
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, chatJid }, 'Failed to process Telegram photo');
+      }
+    }
+
+    this.opts.onMessage(chatJid, {
+      id: ctx.message.message_id.toString(),
+      chat_jid: chatJid,
+      sender: ctx.from?.id?.toString() || '',
+      sender_name: senderName,
+      content,
+      timestamp,
+      is_from_me: false,
     });
   }
 
