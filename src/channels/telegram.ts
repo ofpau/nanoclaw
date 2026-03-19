@@ -65,8 +65,15 @@ export class TelegramChannel implements Channel {
     });
 
     this.bot.on('message:text', async (ctx) => {
-      // Skip commands
-      if (ctx.message.text.startsWith('/')) return;
+      // Skip Telegram /commands — but let NanoClaw slash commands through
+      const NANOCLAW_COMMANDS = new Set([
+        '/compact',
+        '/remote-control',
+        '/remote-control-end',
+      ]);
+      const text = ctx.message.text.trim();
+      if (text.startsWith('/') && !NANOCLAW_COMMANDS.has(text))
+        return;
 
       const chatJid = `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
