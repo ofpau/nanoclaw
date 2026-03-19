@@ -121,9 +121,7 @@ function createSchema(database: Database.Database): void {
 
   // Add is_group column to registered_groups (migration for existing DBs)
   try {
-    database.exec(
-      `ALTER TABLE registered_groups ADD COLUMN is_group INTEGER`,
-    );
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN is_group INTEGER`);
     // Backfill from chats table where known
     database.exec(
       `UPDATE registered_groups SET is_group = (SELECT is_group FROM chats WHERE chats.jid = registered_groups.jid) WHERE EXISTS (SELECT 1 FROM chats WHERE chats.jid = registered_groups.jid AND chats.is_group IS NOT NULL)`,
