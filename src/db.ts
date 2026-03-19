@@ -119,6 +119,19 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add is_group column to registered_groups (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN is_group INTEGER`,
+    );
+    // Backfill from chats table where known
+    database.exec(
+      `UPDATE registered_groups SET is_group = (SELECT is_group FROM chats WHERE chats.jid = registered_groups.jid) WHERE EXISTS (SELECT 1 FROM chats WHERE chats.jid = registered_groups.jid AND chats.is_group IS NOT NULL)`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -554,6 +567,7 @@ export function getRegisteredGroup(
         container_config: string | null;
         requires_trigger: number | null;
         is_main: number | null;
+        is_group: number | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -576,6 +590,7 @@ export function getRegisteredGroup(
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
+    isGroup: row.is_group === null ? undefined : row.is_group === 1,
   };
 }
 
@@ -584,8 +599,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, is_group)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -595,7 +610,19 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.containerConfig ? JSON.stringify(group.containerConfig) : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
+    group.isGroup === undefined ? null : group.isGroup ? 1 : 0,
   );
+}
+
+/**
+ * Look up whether a chat is a group from the chats table.
+ */
+export function getChatIsGroup(jid: string): boolean | undefined {
+  const row = db
+    .prepare('SELECT is_group FROM chats WHERE jid = ?')
+    .get(jid) as { is_group: number | null } | undefined;
+  if (!row || row.is_group === null) return undefined;
+  return row.is_group === 1;
 }
 
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
@@ -608,6 +635,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     container_config: string | null;
     requires_trigger: number | null;
     is_main: number | null;
+    is_group: number | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -629,6 +657,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      isGroup: row.is_group === null ? undefined : row.is_group === 1,
     };
   }
   return result;

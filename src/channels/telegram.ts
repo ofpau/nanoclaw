@@ -29,7 +29,7 @@ async function sendTelegramMessage(
   text: string,
   options: { message_thread_id?: number } = {},
 ): Promise<void> {
-  await api.sendMessage(chatId, text, options);
+  await api.sendMessage(chatId, text, { ...options, parse_mode: 'Markdown' });
 }
 
 export class TelegramChannel implements Channel {
@@ -56,9 +56,7 @@ export class TelegramChannel implements Channel {
           ? ctx.from?.first_name || 'Private'
           : (ctx.chat as any).title || 'Unknown';
 
-      ctx.reply(
-        `Chat ID: tg:${chatId}\nName: ${chatName}\nType: ${chatType}`,
-      );
+      ctx.reply(`Chat ID: tg:${chatId}\nName: ${chatName}\nType: ${chatType}`);
     });
 
     // Command to check bot status

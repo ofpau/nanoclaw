@@ -31,6 +31,7 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getChatIsGroup,
   getMessagesSince,
   getNewMessages,
   getRegisteredGroup,
@@ -102,6 +103,21 @@ function saveState(): void {
   setRouterState('last_agent_timestamp', JSON.stringify(lastAgentTimestamp));
 }
 
+/**
+ * Infer whether a JID is a group chat from its format.
+ * WhatsApp: @g.us = group, @s.whatsapp.net = private
+ * Telegram: negative numeric ID = group, positive = private
+ * Discord: always group-like
+ */
+function inferIsGroupFromJid(jid: string): boolean | undefined {
+  if (jid.endsWith('@g.us')) return true;
+  if (jid.endsWith('@s.whatsapp.net')) return false;
+  const tgMatch = jid.match(/^tg:(-?\d+)$/);
+  if (tgMatch) return parseInt(tgMatch[1], 10) < 0;
+  if (jid.startsWith('dc:')) return true;
+  return undefined;
+}
+
 function registerGroup(jid: string, group: RegisteredGroup): void {
   let groupDir: string;
   try {
@@ -114,6 +130,11 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     return;
   }
 
+  // Auto-detect isGroup if not explicitly set
+  if (group.isGroup === undefined) {
+    group.isGroup = getChatIsGroup(jid) ?? inferIsGroupFromJid(jid);
+  }
+
   registeredGroups[jid] = group;
   setRegisteredGroup(jid, group);
 
@@ -121,7 +142,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
   logger.info(
-    { jid, name: group.name, folder: group.folder },
+    { jid, name: group.name, folder: group.folder, isGroup: group.isGroup },
     'Group registered',
   );
 }
@@ -166,6 +187,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const isMainGroup = group.isMain === true;
+  const isPrivateChat = group.isGroup === false;
 
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
   const missedMessages = getMessagesSince(
@@ -197,9 +219,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       formatMessages,
       canSenderInteract: (msg) => {
         const hasTrigger = TRIGGER_PATTERN.test(msg.content.trim());
-        const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
+        const reqTrigger =
+          !isMainGroup && !isPrivateChat && group.requiresTrigger !== false;
         return (
           isMainGroup ||
+          isPrivateChat ||
           !reqTrigger ||
           (hasTrigger &&
             (msg.is_from_me ||
@@ -212,7 +236,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // --- End session command interception ---
 
   // For non-main groups, check if trigger is required and present
-  if (!isMainGroup && group.requiresTrigger !== false) {
+  // Private (1-on-1) chats skip the trigger check like main group does
+  if (!isMainGroup && !isPrivateChat && group.requiresTrigger !== false) {
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
       (m) =>
@@ -476,9 +501,12 @@ async function startMessageLoop(): Promise<void> {
           }
           // --- End session command interception ---
 
-          const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
+          const isPrivateChat = group.isGroup === false;
+          const needsTrigger =
+            !isMainGroup && !isPrivateChat && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
+          // Private (1-on-1) chats skip the trigger check like main group.
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
@@ -602,7 +630,7 @@ async function main(): Promise<void> {
         process.cwd(),
       );
       if (result.ok) {
-        await channel.sendMessage(chatJid, result.url);
+        await channel.sendMessage(chatJid, result.url.replace(/_/g, '\\_'));
       } else {
         await channel.sendMessage(
           chatJid,
