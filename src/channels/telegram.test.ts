@@ -1022,7 +1022,7 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
         '100200300',
         'Hello',
-        {},
+        { parse_mode: 'Markdown' },
       );
     });
 
@@ -1036,7 +1036,7 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
         '-1001234567890',
         'Group message',
-        {},
+        { parse_mode: 'Markdown' },
       );
     });
 
@@ -1053,13 +1053,13 @@ describe('TelegramChannel', () => {
         1,
         '100200300',
         'x'.repeat(4096),
-        {},
+        { parse_mode: 'Markdown' },
       );
       expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
         2,
         '100200300',
         'x'.repeat(904),
-        {},
+        { parse_mode: 'Markdown' },
       );
     });
 
@@ -1087,6 +1087,37 @@ describe('TelegramChannel', () => {
       await expect(
         channel.sendMessage('tg:100200300', 'Will fail'),
       ).resolves.toBeUndefined();
+    });
+
+    it('falls back to plain text when Markdown parsing fails', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const parseError = new Error(
+        "Call to 'sendMessage' failed! (400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 750)",
+      );
+      currentBot().api.sendMessage.mockRejectedValueOnce(parseError);
+      // Second call (plain text retry) should succeed
+      currentBot().api.sendMessage.mockResolvedValueOnce({} as never);
+
+      await channel.sendMessage('tg:100200300', '*broken markdown');
+
+      expect(currentBot().api.sendMessage).toHaveBeenCalledTimes(2);
+      // First attempt with Markdown
+      expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        '100200300',
+        '*broken markdown',
+        { parse_mode: 'Markdown' },
+      );
+      // Retry without parse_mode
+      expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        '100200300',
+        '*broken markdown',
+        {},
+      );
     });
 
     it('does nothing when bot is not initialized', async () => {

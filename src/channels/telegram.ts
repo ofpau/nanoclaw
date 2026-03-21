@@ -29,7 +29,22 @@ async function sendTelegramMessage(
   text: string,
   options: { message_thread_id?: number } = {},
 ): Promise<void> {
-  await api.sendMessage(chatId, text, { ...options, parse_mode: 'Markdown' });
+  try {
+    await api.sendMessage(chatId, text, {
+      ...options,
+      parse_mode: 'Markdown',
+    });
+  } catch (err: unknown) {
+    const isParseError =
+      err instanceof Error &&
+      err.message.includes("can't parse entities");
+    if (isParseError) {
+      logger.warn('Markdown parse failed, retrying as plain text');
+      await api.sendMessage(chatId, text, options);
+    } else {
+      throw err;
+    }
+  }
 }
 
 export class TelegramChannel implements Channel {
