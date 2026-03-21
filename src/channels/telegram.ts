@@ -36,8 +36,7 @@ async function sendTelegramMessage(
     });
   } catch (err: unknown) {
     const isParseError =
-      err instanceof Error &&
-      err.message.includes("can't parse entities");
+      err instanceof Error && err.message.includes("can't parse entities");
     if (isParseError) {
       logger.warn('Markdown parse failed, retrying as plain text');
       await api.sendMessage(chatId, text, options);
